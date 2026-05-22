@@ -1,0 +1,727 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0, user-scalable=no">
+    <title>Король в кладовке: Месть свергнутого монарха</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+            user-select: none;
+        }
+
+        body {
+            background: #0a0f1e;
+            min-height: 100vh;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            font-family: 'Courier New', 'VT323', monospace;
+        }
+
+        .game-container {
+            background: #000;
+            padding: 10px;
+            border-radius: 16px;
+            box-shadow: 0 0 0 4px #5c3e1f, 0 0 0 8px #2c1a0c;
+        }
+
+        canvas {
+            display: block;
+            margin: 0 auto;
+            image-rendering: crisp-edges;
+            image-rendering: pixelated;
+            cursor: crosshair;
+        }
+
+        .ui-panel {
+            margin-top: 12px;
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            background: #1e1a0c;
+            padding: 8px 16px;
+            border-radius: 8px;
+            color: #f0e6a0;
+            text-shadow: 2px 2px 0 #3a2a0a;
+            font-weight: bold;
+            font-size: 20px;
+            gap: 20px;
+            flex-wrap: wrap;
+        }
+
+        .stats {
+            display: flex;
+            gap: 24px;
+        }
+
+        .stat {
+            background: #2a2418;
+            padding: 4px 12px;
+            border-radius: 20px;
+            letter-spacing: 1px;
+        }
+
+        .weapon-slot {
+            background: #2a2418;
+            padding: 4px 12px;
+            border-radius: 20px;
+            display: flex;
+            align-items: center;
+            gap: 8px;
+        }
+
+        .weapon-icon {
+            font-size: 24px;
+        }
+
+        .controls-hint {
+            font-size: 14px;
+            background: #00000088;
+            padding: 4px 12px;
+            border-radius: 20px;
+            font-family: monospace;
+        }
+
+        button {
+            background: #5e3a1c;
+            border: none;
+            color: #ffefb0;
+            font-family: inherit;
+            font-weight: bold;
+            font-size: 16px;
+            padding: 6px 16px;
+            border-radius: 40px;
+            cursor: pointer;
+            transition: all 0.1s;
+        }
+
+        button:hover {
+            background: #7e542c;
+            transform: scale(0.98);
+        }
+    </style>
+</head>
+<body>
+<div id="gameRoot">
+    <div class="game-container">
+        <canvas id="gameCanvas" width="960" height="540"></canvas>
+        <div class="ui-panel">
+            <div class="stats">
+                <div class="stat">❤️ ЗДОРОВЬЕ: <span id="hpValue">0</span></div>
+                <div class="stat">⚔️ УРОН: <span id="dmgValue">0</span></div>
+            </div>
+            <div class="weapon-slot">
+                <span class="weapon-icon" id="weaponIcon">🔪</span>
+                <span id="weaponName">Ржавый нож</span>
+            </div>
+            <div class="controls-hint">
+                🖱️ ЛКМ - атака/лук | ⏎ Пробел/Shift - уклон | WASD - движение
+            </div>
+            <button id="resetGameBtn">🔄 Переродиться</button>
+        </div>
+    </div>
+</div>
+
+<script>
+    (function(){
+        const canvas = document.getElementById('gameCanvas');
+        const ctx = canvas.getContext('2d');
+        ctx.imageSmoothingEnabled = false;
+
+        // ========== СОСТОЯНИЕ ИГРЫ ==========
+        let gameActive = true;      // активна ли игра (не концовка)
+        let victory = false;        // победа?
+        let defeat = false;         // поражение?
+        
+        // ========== МИР ==========
+        const MAP_WIDTH = 3200;
+        const MAP_HEIGHT = 2400;
+        let camera = { x: 0, y: 0 };
+        
+        // ========== ИГРОК ==========
+        let player = {
+            x: 400, y: 2000,
+            hp: 100,
+            maxHp: 100,
+            baseDamage: 15,
+            weaponDamageBonus: 0,
+            weaponType: "knife",
+            weaponName: "Ржавый нож",
+            weaponIcon: "🔪",
+            invincibleTimer: 0,
+            isDodging: false,
+            dodgeCooldown: 0,
+            attackTimer: 0,
+            radius: 18
+        };
+        
+        // Оружие
+        const weaponUpgrades = {
+            sword: { dmgBonus: 18, name: "Рыцарский меч", icon: "⚔️", type: "sword" },
+            axe: { dmgBonus: 28, name: "Боевой топор", icon: "🪓", type: "axe" },
+            bow: { dmgBonus: 12, name: "Длинный лук", icon: "🏹", type: "bow" }
+        };
+        
+        // Враги и стрелы
+        let enemies = [];
+        let arrows = [];
+        
+        // Лук
+        let bowCharging = false;
+        let bowPower = 0;
+        let bowAngle = 0;
+        
+        // UI элементы
+        const hpSpan = document.getElementById('hpValue');
+        const dmgSpan = document.getElementById('dmgValue');
+        const weaponNameSpan = document.getElementById('weaponName');
+        const weaponIconSpan = document.getElementById('weaponIcon');
+        
+        // Предметы на карте
+        let items = [
+            { x: 950, y: 1900, type: "sword", collected: false, icon: "⚔️" },
+            { x: 1820, y: 1550, type: "axe", collected: false, icon: "🪓" },
+            { x: 2650, y: 980, type: "bow", collected: false, icon: "🏹" }
+        ];
+        
+        // Флаг для босса (НЕ defeated с самого начала!)
+        let bossSpawned = false;
+        let bossAlive = false;
+        
+        // ========== ВСПОМОГАТЕЛЬНЫЕ ФУНКЦИИ ==========
+        function updateUI() {
+            hpSpan.innerText = `${player.hp}/${player.maxHp}`;
+            let totalDmg = player.baseDamage + player.weaponDamageBonus;
+            dmgSpan.innerText = totalDmg;
+            weaponNameSpan.innerText = player.weaponName;
+            weaponIconSpan.innerText = player.weaponIcon;
+        }
+        
+        function setWeapon(type) {
+            if(type === "knife") {
+                player.weaponDamageBonus = 0;
+                player.weaponName = "Ржавый нож";
+                player.weaponIcon = "🔪";
+                player.weaponType = "knife";
+            } else if(type === "sword") {
+                player.weaponDamageBonus = weaponUpgrades.sword.dmgBonus;
+                player.weaponName = weaponUpgrades.sword.name;
+                player.weaponIcon = weaponUpgrades.sword.icon;
+                player.weaponType = "sword";
+            } else if(type === "axe") {
+                player.weaponDamageBonus = weaponUpgrades.axe.dmgBonus;
+                player.weaponName = weaponUpgrades.axe.name;
+                player.weaponIcon = weaponUpgrades.axe.icon;
+                player.weaponType = "axe";
+            } else if(type === "bow") {
+                player.weaponDamageBonus = weaponUpgrades.bow.dmgBonus;
+                player.weaponName = weaponUpgrades.bow.name;
+                player.weaponIcon = weaponUpgrades.bow.icon;
+                player.weaponType = "bow";
+            }
+            updateUI();
+        }
+        
+        // Урон игроку
+        function damagePlayer(amount) {
+            if(!gameActive) return;
+            if(player.invincibleTimer > 0 || player.isDodging) return;
+            player.hp = Math.max(0, player.hp - amount);
+            player.invincibleTimer = 0.8;
+            updateUI();
+            if(player.hp <= 0 && gameActive) {
+                gameActive = false;
+                defeat = true;
+                victory = false;
+            }
+        }
+        
+        // Ближняя атака
+        function meleeAttack() {
+            if(!gameActive) return;
+            if(player.attackTimer > 0) return;
+            player.attackTimer = 0.5;
+            let totalDamage = player.baseDamage + player.weaponDamageBonus;
+            let attackRange = 55;
+            for(let i=0; i<enemies.length; i++) {
+                const e = enemies[i];
+                const dist = Math.hypot(player.x - e.x, player.y - e.y);
+                if(dist < attackRange + e.radius) {
+                    e.hp -= totalDamage;
+                    if(e.hp <= 0) {
+                        enemies.splice(i,1);
+                        i--;
+                    }
+                }
+            }
+        }
+        
+        // Выстрел из лука
+        function shootArrow(angle, powerFactor) {
+            let totalDamage = player.baseDamage + player.weaponDamageBonus;
+            let dmg = Math.floor(totalDamage * (0.8 + powerFactor * 0.6));
+            let speed = 500 + powerFactor * 300;
+            arrows.push({
+                x: player.x, y: player.y,
+                vx: Math.cos(angle) * speed,
+                vy: Math.sin(angle) * speed,
+                damage: dmg,
+                radius: 6
+            });
+        }
+        
+        // Уклонение
+        function performDodge() {
+            if(!gameActive) return false;
+            if(player.dodgeCooldown > 0) return false;
+            player.isDodging = true;
+            player.dodgeCooldown = 1.2;
+            setTimeout(() => { player.isDodging = false; }, 250);
+            return true;
+        }
+        
+        // ========== СПАВН ВРАГОВ ==========
+        function spawnInitialEnemies() {
+            enemies = [];
+            // Предатели на пути к тронному залу
+            enemies.push({ x: 1200, y: 1850, hp: 45, maxHp:45, radius: 20, damage: 12, type: "traitor", speed: 65, attackCooldown:0 });
+            enemies.push({ x: 1550, y: 1600, hp: 40, maxHp:40, radius: 20, damage: 12, type: "traitor", speed: 70, attackCooldown:0 });
+            enemies.push({ x: 2100, y: 1400, hp: 50, maxHp:50, radius: 20, damage: 14, type: "traitor", speed: 68, attackCooldown:0 });
+            enemies.push({ x: 2450, y: 1100, hp: 55, maxHp:55, radius: 20, damage: 14, type: "traitor", speed: 72, attackCooldown:0 });
+            enemies.push({ x: 2800, y: 850, hp: 60, maxHp:60, radius: 20, damage: 15, type: "traitor", speed: 75, attackCooldown:0 });
+        }
+        
+        // Спавн босса (только когда дошли до тронного зала)
+        function spawnBossIfNeeded() {
+            if(!gameActive) return;
+            if(bossSpawned) return;
+            // Проверяем, достаточно ли близко игрок к тронному залу (x > 2600, y < 700)
+            if(player.x > 2600 && player.y < 800) {
+                bossSpawned = true;
+                bossAlive = true;
+                enemies.push({
+                    x: 3050, y: 550,
+                    hp: 220,
+                    maxHp: 220,
+                    radius: 34,
+                    damage: 24,
+                    type: "boss",
+                    speed: 50,
+                    attackCooldown: 0,
+                    summonTimer: 0
+                });
+            }
+        }
+        
+        // ========== ОБНОВЛЕНИЯ ==========
+        function updateEnemies(deltaTime) {
+            for(let i=0; i<enemies.length; i++) {
+                const e = enemies[i];
+                // Движение к игроку
+                const dx = player.x - e.x;
+                const dy = player.y - e.y;
+                const len = Math.hypot(dx,dy);
+                if(len > 0.5) {
+                    let move = Math.min(e.speed * deltaTime, len - 8);
+                    e.x += (dx/len) * move;
+                    e.y += (dy/len) * move;
+                }
+                
+                // Атака врага
+                if(e.attackCooldown === undefined) e.attackCooldown = 0;
+                e.attackCooldown -= deltaTime;
+                const distToPlayer = Math.hypot(player.x - e.x, player.y - e.y);
+                if(distToPlayer < e.radius + player.radius && e.attackCooldown <= 0) {
+                    damagePlayer(e.damage);
+                    e.attackCooldown = 0.9;
+                }
+                
+                // Босс: призыв миньонов
+                if(e.type === "boss" && gameActive) {
+                    if(e.summonTimer === undefined) e.summonTimer = 0;
+                    e.summonTimer += deltaTime;
+                    if(e.summonTimer > 5.0 && enemies.length < 14) {
+                        e.summonTimer = 0;
+                        for(let s=0; s<2; s++) {
+                            let angle = Math.random() * Math.PI * 2;
+                            let px = e.x + Math.cos(angle)*55;
+                            let py = e.y + Math.sin(angle)*55;
+                            enemies.push({
+                                x: px, y: py, hp: 32, maxHp:32, radius: 18, damage: 12,
+                                type: "minion", speed: 80, attackCooldown:0
+                            });
+                        }
+                    }
+                }
+            }
+        }
+        
+        function updateArrows(deltaTime) {
+            for(let i=0;i<arrows.length;i++) {
+                let a = arrows[i];
+                a.x += a.vx * deltaTime;
+                a.y += a.vy * deltaTime;
+                let hit = false;
+                for(let j=0;j<enemies.length;j++) {
+                    const e = enemies[j];
+                    if(Math.hypot(a.x - e.x, a.y - e.y) < e.radius+6) {
+                        e.hp -= a.damage;
+                        if(e.hp <= 0) {
+                            enemies.splice(j,1);
+                        }
+                        hit = true;
+                        break;
+                    }
+                }
+                if(hit || a.x<0 || a.x>MAP_WIDTH || a.y<0 || a.y>MAP_HEIGHT) {
+                    arrows.splice(i,1);
+                    i--;
+                }
+            }
+        }
+        
+        function checkPickups() {
+            for(let i=0;i<items.length;i++) {
+                if(!items[i].collected && Math.hypot(player.x - items[i].x, player.y - items[i].y) < 30) {
+                    items[i].collected = true;
+                    setWeapon(items[i].type);
+                }
+            }
+        }
+        
+        // Проверка победы: босс мёртв и был спавнен
+        function checkVictory() {
+            if(!gameActive) return;
+            if(!bossSpawned) return;
+            const bossExists = enemies.some(e => e.type === "boss");
+            if(!bossExists && bossAlive) {
+                // Босс только что убит
+                bossAlive = false;
+                gameActive = false;
+                victory = true;
+                defeat = false;
+            }
+        }
+        
+        // Движение WASD
+        let keys = { w: false, s: false, a: false, d: false };
+        
+        function handleMovement(deltaTime) {
+            let moveSpeed = 380;
+            let dx = 0, dy = 0;
+            if(keys.w) dy -= 1;
+            if(keys.s) dy += 1;
+            if(keys.a) dx -= 1;
+            if(keys.d) dx += 1;
+            
+            if(dx !== 0 || dy !== 0) {
+                let len = Math.hypot(dx, dy);
+                dx = dx / len * moveSpeed * deltaTime;
+                dy = dy / len * moveSpeed * deltaTime;
+                let newX = player.x + dx;
+                let newY = player.y + dy;
+                player.x = Math.min(Math.max(newX, 35), MAP_WIDTH - 35);
+                player.y = Math.min(Math.max(newY, 35), MAP_HEIGHT - 35);
+            }
+        }
+        
+        function updateCamera() {
+            camera.x = player.x - canvas.width/2;
+            camera.y = player.y - canvas.height/2;
+            camera.x = Math.min(Math.max(camera.x, 0), MAP_WIDTH - canvas.width);
+            camera.y = Math.min(Math.max(camera.y, 0), MAP_HEIGHT - canvas.height);
+        }
+        
+        function updateTimers(deltaTime) {
+            if(player.invincibleTimer > 0) player.invincibleTimer -= deltaTime;
+            if(player.attackTimer > 0) player.attackTimer -= deltaTime;
+            if(player.dodgeCooldown > 0) player.dodgeCooldown -= deltaTime;
+        }
+        
+        // ========== ОТРИСОВКА ==========
+        function draw() {
+            ctx.clearRect(0,0,canvas.width,canvas.height);
+            // Пол
+            ctx.fillStyle = "#2b251c";
+            ctx.fillRect(0,0,canvas.width,canvas.height);
+            for(let i=0;i<300;i++) {
+                ctx.fillStyle = "#5c4a32";
+                ctx.fillRect((i*43)%canvas.width, (i*29)%canvas.height, 3,3);
+            }
+            // Колонны
+            ctx.strokeStyle = "#b89a6a";
+            ctx.lineWidth = 12;
+            for(let i=0;i<8;i++) {
+                ctx.beginPath();
+                ctx.moveTo(350+i*380-camera.x, 150-camera.y);
+                ctx.lineTo(350+i*380-camera.x, MAP_HEIGHT-150-camera.y);
+                ctx.stroke();
+            }
+            
+            // Предметы
+            for(let it of items) {
+                if(!it.collected){
+                    ctx.fillStyle = "#e5b83c";
+                    ctx.beginPath();
+                    ctx.arc(it.x-camera.x, it.y-camera.y, 16,0,Math.PI*2);
+                    ctx.fill();
+                    ctx.fillStyle = "#2d2418";
+                    ctx.font = "28px monospace";
+                    ctx.fillText(it.icon, it.x-camera.x-12, it.y-camera.y+10);
+                }
+            }
+            
+            // Враги
+            for(let e of enemies) {
+                // Цвет
+                if(e.type === "boss") ctx.fillStyle = "#802a1a";
+                else if(e.type === "minion") ctx.fillStyle = "#5a3a28";
+                else ctx.fillStyle = "#4a3220";
+                ctx.beginPath();
+                ctx.arc(e.x-camera.x, e.y-camera.y, e.radius-3,0,Math.PI*2);
+                ctx.fill();
+                ctx.fillStyle = "#f0bc7a";
+                ctx.font = "bold 26px monospace";
+                if(e.type === "boss") ctx.fillText("👑", e.x-camera.x-15, e.y-camera.y-8);
+                else if(e.type === "minion") ctx.fillText("⚔️", e.x-camera.x-10, e.y-camera.y-6);
+                else ctx.fillText("🗡️", e.x-camera.x-10, e.y-camera.y-6);
+                // Полоска HP
+                let hpPercent = e.hp/e.maxHp;
+                ctx.fillStyle = "#531212";
+                ctx.fillRect(e.x-camera.x-22, e.y-camera.y-20, 44, 7);
+                ctx.fillStyle = "#3aa83a";
+                ctx.fillRect(e.x-camera.x-22, e.y-camera.y-20, 44*hpPercent, 6);
+            }
+            
+            // Стрелы
+            for(let a of arrows) {
+                ctx.fillStyle = "#f5c86c";
+                ctx.beginPath();
+                ctx.arc(a.x-camera.x, a.y-camera.y, 6,0,Math.PI*2);
+                ctx.fill();
+            }
+            
+            // Игрок
+            ctx.fillStyle = "#6c4f2e";
+            ctx.beginPath();
+            ctx.arc(player.x-camera.x, player.y-camera.y, player.radius-2,0,Math.PI*2);
+            ctx.fill();
+            ctx.fillStyle = "#f4d092";
+            ctx.font = "32px monospace";
+            ctx.fillText("🤴", player.x-camera.x-16, player.y-camera.y-6);
+            if(player.isDodging) {
+                ctx.strokeStyle = "#aaffdd";
+                ctx.lineWidth = 3;
+                ctx.beginPath();
+                ctx.arc(player.x-camera.x, player.y-camera.y, player.radius+2,0,Math.PI*2);
+                ctx.stroke();
+            }
+            
+            // Прицел лука
+            if(player.weaponType === "bow" && bowCharging && gameActive) {
+                ctx.beginPath();
+                ctx.arc(player.x-camera.x, player.y-camera.y, 38,0,Math.PI*2);
+                ctx.strokeStyle = "#ffff66";
+                ctx.lineWidth = 2;
+                ctx.stroke();
+                let aimX = Math.cos(bowAngle)*65 + player.x-camera.x;
+                let aimY = Math.sin(bowAngle)*65 + player.y-camera.y;
+                ctx.fillStyle = "#ffcc44";
+                ctx.beginPath();
+                ctx.arc(aimX, aimY, 10,0,Math.PI*2);
+                ctx.fill();
+                let powerPercent = Math.min(1, bowPower/0.8);
+                ctx.fillStyle = "#ffaa33";
+                ctx.fillRect(player.x-camera.x-25, player.y-camera.y-35, 50*powerPercent, 6);
+            }
+            
+            // HP Босса если жив
+            const boss = enemies.find(e => e.type === "boss");
+            if(boss && gameActive && !victory) {
+                ctx.fillStyle = "#2a1a0aee";
+                ctx.fillRect(18,18,340,38);
+                ctx.fillStyle = "#c03232";
+                ctx.fillRect(22,22, (boss.hp/boss.maxHp)*332, 28);
+                ctx.fillStyle = "#ffecb3";
+                ctx.font = "bold 20px monospace";
+                ctx.fillText(`⚔️ ФАЛЬШИВЫЙ КОРОЛЬ ${boss.hp}/${boss.maxHp}`, 28, 48);
+            }
+        }
+        
+        // ========== ЭКРАН КОНЦОВКИ ==========
+        function drawEndScreen() {
+            draw(); // фон
+            ctx.fillStyle = "rgba(0,0,0,0.88)";
+            ctx.fillRect(0,0,canvas.width,canvas.height);
+            ctx.font = "bold 36px monospace";
+            ctx.fillStyle = victory ? "#c6ff9e" : "#ffae7a";
+            let title = victory ? "✧ КОРОЛЕВСТВО СПАСЕНО! ✧" : "❖ КОРОЛЕВСТВО В ОГНЕ ❖";
+            ctx.fillText(title, canvas.width/2-220, canvas.height/2-40);
+            ctx.font = "22px monospace";
+            ctx.fillStyle = "#ecd89e";
+            if(victory){
+                ctx.fillText("Фальшивый король изгнан. Королевство процветает.", canvas.width/2-280, canvas.height/2+20);
+            } else {
+                ctx.fillText("Предательство погубило земли... Начните заново.", canvas.width/2-270, canvas.height/2+20);
+            }
+            ctx.font = "18px monospace";
+            ctx.fillStyle = "#bba87a";
+            ctx.fillText("Нажмите «Переродиться», чтобы вернуть короля на трон", canvas.width/2-280, canvas.height/2+80);
+        }
+        
+        // ========== ПЕРЕЗАПУСК ==========
+        function restartGame() {
+            // Сброс всех флагов
+            gameActive = true;
+            victory = false;
+            defeat = false;
+            bossSpawned = false;
+            bossAlive = false;
+            
+            // Сброс игрока
+            player = {
+                x: 400, y: 2000,
+                hp: 100,
+                maxHp: 100,
+                baseDamage: 15,
+                weaponDamageBonus: 0,
+                weaponType: "knife",
+                weaponName: "Ржавый нож",
+                weaponIcon: "🔪",
+                invincibleTimer: 0,
+                isDodging: false,
+                dodgeCooldown: 0,
+                attackTimer: 0,
+                radius: 18
+            };
+            
+            arrows = [];
+            // Сброс предметов
+            items.forEach(i => { i.collected = false; });
+            
+            // Спавним начальных врагов
+            spawnInitialEnemies();
+            
+            // Сбрасываем оружие на нож
+            setWeapon("knife");
+            
+            // Сбрасываем лук
+            bowCharging = false;
+            bowPower = 0;
+            
+            // Сбрасываем клавиши
+            keys = { w: false, s: false, a: false, d: false };
+            
+            // Камера
+            updateCamera();
+            updateUI();
+        }
+        
+        // ========== ОСНОВНОЙ ЦИКЛ ==========
+        let lastFrameTime = 0;
+        
+        function gameLoop(nowMs) {
+            if(!gameActive && (victory || defeat)) {
+                drawEndScreen();
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+            
+            let delta = Math.min(0.033, (nowMs - lastFrameTime) / 1000);
+            if(delta <= 0) {
+                lastFrameTime = nowMs;
+                draw();
+                requestAnimationFrame(gameLoop);
+                return;
+            }
+            lastFrameTime = nowMs;
+            
+            if(gameActive) {
+                handleMovement(delta);
+                updateEnemies(delta);
+                updateArrows(delta);
+                updateTimers(delta);
+                checkPickups();
+                spawnBossIfNeeded();
+                checkVictory();
+                updateCamera();
+            }
+            draw();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        // ========== СОБЫТИЯ МЫШИ И КЛАВИАТУРЫ ==========
+        function handleMouseDown(e) {
+            if(!gameActive) return;
+            if(player.weaponType === "bow") {
+                bowCharging = true;
+                bowPower = 0;
+                e.preventDefault();
+            } else {
+                meleeAttack();
+            }
+        }
+        
+        function handleMouseUp(e) {
+            if(!gameActive) return;
+            if(player.weaponType === "bow" && bowCharging) {
+                let power = Math.min(1.0, bowPower/0.7);
+                shootArrow(bowAngle, power);
+                bowCharging = false;
+                bowPower = 0;
+            }
+        }
+        
+        function handleMouseMove(e) {
+            const rect = canvas.getBoundingClientRect();
+            let mx = (e.clientX - rect.left) + camera.x;
+            let my = (e.clientY - rect.top) + camera.y;
+            let angle = Math.atan2(my - player.y, mx - player.x);
+            bowAngle = angle;
+            if(bowCharging) {
+                bowPower = Math.min(1.2, bowPower + 0.025);
+            }
+        }
+        
+        // ========== ИНИЦИАЛИЗАЦИЯ ==========
+        function init() {
+            restartGame(); // Полностью чистое начало
+            updateUI();
+            
+            canvas.addEventListener('mousedown', handleMouseDown);
+            canvas.addEventListener('mouseup', handleMouseUp);
+            canvas.addEventListener('mousemove', handleMouseMove);
+            
+            window.addEventListener('keydown', (e) => {
+                let key = e.key.toLowerCase();
+                if(key === 'w') { keys.w = true; e.preventDefault(); }
+                if(key === 's') { keys.s = true; e.preventDefault(); }
+                if(key === 'a') { keys.a = true; e.preventDefault(); }
+                if(key === 'd') { keys.d = true; e.preventDefault(); }
+                if(key === ' ' || key === 'shift') { e.preventDefault(); performDodge(); }
+                if(key === 'arrowup' || key === 'arrowdown' || key === 'arrowleft' || key === 'arrowright') e.preventDefault();
+            });
+            window.addEventListener('keyup', (e) => {
+                let key = e.key.toLowerCase();
+                if(key === 'w') keys.w = false;
+                if(key === 's') keys.s = false;
+                if(key === 'a') keys.a = false;
+                if(key === 'd') keys.d = false;
+            });
+            
+            document.getElementById('resetGameBtn').addEventListener('click', () => {
+                restartGame();
+            });
+            
+            lastFrameTime = performance.now();
+            requestAnimationFrame(gameLoop);
+        }
+        
+        init();
+    })();
+</script>
+</body>
+</html>
